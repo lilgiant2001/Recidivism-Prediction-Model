@@ -1,0 +1,285 @@
+---
+output: Project_Final
+  pdf_document: default
+  html_document: default
+---
+```{r setup, include=FALSE}
+library(randomForest)
+library(caret)
+library(pROC)
+library(ggplot2)
+library(tree)
+library(dplyr)
+library(tidyr)
+```
+
+###Initial Analysis
+
+#Data Cleaning
+```{r,results='hide'}
+#CrimeData <- read.csv("CrimeDataTrain.csv")
+CrimeData <- read.csv("D:/JY stuff/Grinnell College/2nd Year/Spring term 1/Intro to Data Science (STA-230)/Projects/Final Project/CrimeDataTrain.csv")
+
+
+#change categorical variables into factors
+CrimeData$is_recid <- as.factor(CrimeData$is_recid)
+CrimeData$race <- as.factor(CrimeData$race)
+CrimeData$sex <- as.factor(CrimeData$sex)
+CrimeData$marital <- as.factor(CrimeData$marital)
+
+#change is_recid values into characters
+levels(CrimeData$is_recid) <- c("Not Recidivated", "Recidivated")
+
+#mutate marital status(merge insignificant status into 'other')
+CrimeData$marital[CrimeData$marital =="Separated"|
+                  CrimeData$marital =="Unknown"|
+                  CrimeData$marital =="Widowed"|
+                  CrimeData$marital =="Significant Other"] = "Other"
+
+#mutate juv(add up all types of juvenile charges)
+CrimeData = mutate(CrimeData, juv_count = juv_fel_count + juv_misd_count + juv_other_count)
+
+#select variables that are closely related to recidivism 
+#Through the data analysis, we have identified significant variables that can be used to predict recidivism as shown here
+CrimeData = select(CrimeData, is_recid, sex, race, marital, age, charges, arrests, priors, total_jail ,juv_count)
+
+
+# drop 987 rows that contain na
+CrimeData <- CrimeData %>%
+    drop_na(-is_recid)
+```
+
+#Create Random Forest Model
+```{r}
+set.seed(123)
+# Create a single 2/3 split of the iris data
+# list: should the results be in a list or not 
+# times: the number of partitions to create 
+trainIndex <- createDataPartition(CrimeData$is_recid, p = 2/3, 
+                                  list = FALSE, 
+                                  times = 1) 
+
+CrimeDataTrain <- CrimeData[trainIndex,]
+CrimeDataTest  <- CrimeData[-trainIndex,]
+
+
+
+# Build a random forest USING only the TRAINING Data 
+# Variables are sex, race, marital, age, charges, arrests, priors, total_jail ,juv_count
+forest <- randomForest(is_recid ~ ., data = CrimeDataTrain, importance=TRUE, ntree=1000, mtry = 2, do.trace=FALSE)
+
+forest
+```
+
+#Change roc
+
+We need to figure out which threshold to use for this model. 
+
+#ROC curve of our model
+
+To find out which value of threshold to use for this data, we created a ROC curve on the training data. With this graph, we can notice that the threshold of 0.27 gives us the best accuracy, so we should consider this threshold as one of the candidate thresholds for our model.
+
+```{r,warning=FALSE}
+Crime.pred.prob <- predict(forest, CrimeDataTrain, type="prob")
+Crime.pred.prob <- as.data.frame(Crime.pred.prob)
+
+# Draw ROC curve
+result.roc <- roc(CrimeDataTrain$is_recid, Crime.pred.prob$Recidivated)
+plot(result.roc, print.thres="best", print.thres.best.method="closest.topleft", main = "prediction", print.auc=TRUE)
+
+# Table of TPP, FPP and thresholds
+roc.df <- data.frame(
+  TPP=result.roc$sensitivities*100, ## TPP = true positive percentage
+  FPP=(1 - result.roc$specificities)*100, ## FPP = false positive precentage
+  thresholds=result.roc$thresholds)
+roc.df
+```
+
+#Set a threshold value and create a confusion matrix
+
+Different threshold values give us different FPPs and TPPs as depicted in the table shown below.
+We can clearly see that TPP and FPP both go down as the threshold goes up. 
+This tells us that increasing the threshold may give us a less inaccurate prediction of False Recidivism, but also a less inaccurate prediction of True Recidivism.
+
+
+#threshold value = 0.5 (FINAL)
+
+Matrix of threshold 0.5 shows us that the model does not predict suspects who will recidivate well, but more correctly predicts suspects who will not recidivate. 
+
+```{r}
+Crime.pred.prob <- predict(forest, CrimeDataTest,type="prob")
+ Crime.pred.prob <- as.data.frame(Crime.pred.prob)
+ Crime.pred.prob <- ifelse(Crime.pred.prob$Recidivated > 0.5, 'Recidivated','Not Recidivated')
+ Crime.pred.prob <- as.factor(Crime.pred.prob)
+ table(observed = CrimeDataTest[, "is_recid"], predicted = Crime.pred.prob)
+ 
+```
+
+#Random Forest Model with threshold 0.5 (FINAL)
+```{r}
+#forest2 <- randomForest(is_recid ~ ., data = CrimeData, importance=TRUE, ntree=1000, mtry = 2, do.trace=FALSE)
+```
+
+#threshold value = 0.270
+
+If we look at the matrix of threshold 0.27, we can see that this model predicts suspects who will recidivate better but often misjudges suspects who will not recidivate. 
+
+
+```{r}
+Crime.pred.prob <- predict(forest, CrimeDataTest, type="prob")
+Crime.pred.prob <- as.data.frame(Crime.pred.prob)
+Crime.pred.prob <- ifelse(Crime.pred.prob$Recidivated > 0.270 , 'Recidivated','Not Recidivated')
+Crime.pred.prob <- as.factor(Crime.pred.prob)
+table(observed = CrimeDataTest[, "is_recid"], predicted = Crime.pred.prob)
+```
+
+Between these two models, we decided to use the model with a threshold of 0.5 because we thought even though this model has worse accuracy when predicting suspects who actually will recidivate, it has a lower chance of falsely victimizing suspects who will not recidivate.
+
+#Examples of other thresholds
+#threshold value = 0.2
+```{r}
+Crime.pred.prob <- predict(forest, CrimeDataTest, type="prob")
+Crime.pred.prob <- as.data.frame(Crime.pred.prob)
+Crime.pred.prob <- ifelse(Crime.pred.prob$Recidivated > 0.2 , 'Recidivated','Not Recidivated')
+Crime.pred.prob <- as.factor(Crime.pred.prob)
+table(observed = CrimeDataTest[, "is_recid"], predicted = Crime.pred.prob)
+```
+
+#threshold value = 0.6
+```{r}
+Crime.pred.prob <- predict(forest, CrimeDataTest, type="prob")
+Crime.pred.prob <- as.data.frame(Crime.pred.prob)
+Crime.pred.prob <- ifelse(Crime.pred.prob$Recidivated > 0.6 , 'Recidivated','Not Recidivated')
+Crime.pred.prob <- as.factor(Crime.pred.prob)
+table(observed = CrimeDataTest[, "is_recid"], predicted = Crime.pred.prob)
+```
+
+#confusion matrix by race
+```{r}
+#filter the dataset
+CrimeDataBlack = filter(CrimeDataTest, race == 'African-American') 
+CrimeDataWhite = filter(CrimeDataTest, race == 'Caucasian') 
+```
+
+#confusion matrix for CrimeDataBlack
+```{r}
+Crime.pred.prob.black <- predict(forest, CrimeDataBlack, type="prob")
+Crime.pred.prob.black <- as.data.frame(Crime.pred.prob.black)
+Crime.pred.prob.black <- ifelse(Crime.pred.prob.black$Recidivated > 0.5 , 'Recidivated','Not Recidivated')
+Crime.pred.prob.black <- as.factor(Crime.pred.prob.black)
+table(observed = CrimeDataBlack[, "is_recid"], predicted = Crime.pred.prob.black)
+```
+##TPP = 0.75 FPP = 0.454780362
+
+#confusion matrix for CrimeDataWhite
+```{r}
+Crime.pred.prob.white <- predict(forest, CrimeDataWhite, type="prob")
+Crime.pred.prob.white <- as.data.frame(Crime.pred.prob.white)
+Crime.pred.prob.white <- ifelse(Crime.pred.prob.white$Recidivated > 0.5 , 'Recidivated','Not Recidivated')
+Crime.pred.prob.white <- as.factor(Crime.pred.prob.white)
+table(observed = CrimeDataWhite[, "is_recid"], predicted = Crime.pred.prob.white)
+```
+##TPP = 0.591078067 FPP = 0.269767442
+
+Our TPP and FPP indicates that White people are less likely to recidivate.
+From these matrices, we can clearly see that this model accuses black suspects of being inclined to recidivate than white suspects as the TPP differs by 20%. 
+We can notice that this model, even though no human bias intervened, also has a bias against a certain group of people.
+
+
+###Testing Initial Analysis
+### Testing Model with CrimeTestData
+```{r}
+CrimeTestData <- read.csv("CrimeDataTest.csv")
+
+#change categorical variables into factors
+CrimeTestData$is_recid <- as.factor(CrimeTestData$is_recid)
+CrimeTestData$race <- as.factor(CrimeTestData$race)
+CrimeTestData$sex <- as.factor(CrimeTestData$sex)
+CrimeTestData$marital <- as.factor(CrimeTestData$marital)
+
+#change is_recid values into characters
+levels(CrimeTestData$is_recid) <- c("Not Recidivated", "Recidivated")
+
+#mutate marital status(merge insignificant status into 'other')
+CrimeTestData$marital[CrimeTestData$marital =="Separated"|
+                  CrimeTestData$marital =="Unknown"|
+                  CrimeTestData$marital =="Widowed"|
+                  CrimeTestData$marital =="Significant Other"] = "Other"
+
+#mutate juv(add up all types of juvenile charges)
+CrimeTestData = mutate(CrimeTestData, juv_count = juv_fel_count + juv_misd_count + juv_other_count)
+
+#select variables that are closely related to recidivism 
+CrimeTestData = select(CrimeTestData, is_recid, sex, race, marital, age, charges, arrests, priors, total_jail ,juv_count)
+
+```
+
+##ROC with the CrimeTestdata
+```{r}
+# Crime.train.prob <- predict(forest2, CrimeDataTrain, type="prob")
+# Crime.train.prob <- as.data.frame(Crime.train.prob)
+# 
+# 
+# Crime.test.prob <- predict(forest2, CrimeTestData, type="prob")
+# Crime.test.prob <- as.data.frame(Crime.test.prob)
+# 
+# # Draw ROC curve
+# result2.roc <- roc(CrimeDataTrain$is_recid, Crime.train.prob$Recidivated)
+# plot(result2.roc, print.thres="best", print.thres.best.method="closest.topleft", main = "prediction", print.auc=TRUE)
+# 
+# result2.roc <- roc(CrimeTestData$is_recid, Crime.test.prob$Recidivated)
+# plot(result2.roc, print.thres="best", print.thres.best.method="closest.topleft", main = "prediction", print.auc=TRUE)
+# 
+# # Table of TPP, FPP and thresholds
+# roc.df <- data.frame(
+#   TPP=result2.roc$sensitivities*100, ## TPP = true positive percentage
+#   FPP=(1 - result2.roc$specificities)*100, ## FPP = false positive precentage
+#   thresholds=result2.roc$thresholds)
+# roc.df
+
+
+```
+
+#threshold value = 0.5
+```{r}
+Crime.test.prob <- predict(forest2, CrimeTestData,type="prob")
+ Crime.test.prob <- as.data.frame(Crime.test.prob)
+ Crime.test.prob <- ifelse(Crime.test.prob$Recidivated > 0.5, 'Recidivated','Not Recidivated')
+ Crime.test.prob <- as.factor(Crime.test.prob)
+ table(observed = CrimeTestData[, "is_recid"], predicted = Crime.test.prob)
+ 
+```
+
+FPP = 207/(207+1490) = 0.12
+TPP = 329/(329 + 555) = 0.37
+
+#confusion matrix by race
+```{r}
+#filter the dataset
+CrimeTestDataBlack = filter(CrimeTestData, race == 'African-American') 
+CrimeTestDataWhite = filter(CrimeTestData, race == 'Caucasian') 
+```
+
+#confusion matrix for CrimeTestDataBlack
+```{r}
+Crime.test.prob.black <- predict(forest, CrimeTestDataBlack, type="prob")
+Crime.test.prob.black <- as.data.frame(Crime.test.prob.black)
+Crime.test.prob.black <- ifelse(Crime.test.prob.black$Recidivated > 0.5 , 'Recidivated','Not Recidivated')
+Crime.test.prob.black <- as.factor(Crime.test.prob.black)
+table(observed = CrimeTestDataBlack[, "is_recid"], predicted = Crime.test.prob.black)
+```
+
+FPP = 159/(159+640) = 0.1989
+TPP = 259/ (259+292) = 0.47
+
+#confusion matrix for CrimeTestDataWhite
+```{r}
+Crime.test.prob.white <- predict(forest2, CrimeTestDataWhite, type="prob")
+Crime.test.prob.white <- as.data.frame(Crime.test.prob.white)
+Crime.test.prob.white <- ifelse(Crime.test.prob.white$Recidivated > 0.5 , 'Recidivated','Not Recidivated')
+Crime.test.prob.white <- as.factor(Crime.test.prob.white)
+table(observed = CrimeTestDataWhite[, "is_recid"], predicted = Crime.test.prob.white)
+```
+
+FPP = 34/(571+34) = 0.056198347
+TPP = 57/174+57 = 0.246753247
